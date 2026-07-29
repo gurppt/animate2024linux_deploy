@@ -1,0 +1,59 @@
+diff --git a/dlls/winex11.drv/event.c b/dlls/winex11.drv/event.c
+--- a/dlls/winex11.drv/event.c
++++ b/dlls/winex11.drv/event.c
+@@ -48,6 +48,22 @@
+ WINE_DEFAULT_DEBUG_CHANNEL(event);
+ WINE_DECLARE_DEBUG_CHANNEL(xdnd);
+ 
++/* Animate P11 opt-in measurement; no behavior change unless explicitly set. */
++static int animate_x11_input_trace = -1;
++static int animate_preserve_x11_drag_motion = -1;
++static unsigned long animate_x11_drag_received;
++static unsigned long animate_x11_drag_discarded;
++
++static int animate_env_flag( const char *name, int *cached )
++{
++    const char *value;
++
++    if (*cached != -1) return *cached;
++    value = getenv( name );
++    *cached = value && value[0] && strcmp( value, "0" );
++    return *cached;
++}
++
+ #define DndNotDnd       -1    /* OffiX drag&drop */
+ #define DndUnknown      0
+ #define DndRawData      1
+@@ -428,6 +444,12 @@ static enum event_merge_action merge_events( XEvent *prev, XEvent *next )
+         case MotionNotify:
+             if (prev->xany.window == next->xany.window)
+             {
++                if ((prev->xmotion.state & Button1Mask) &&
++                    (next->xmotion.state & Button1Mask) &&
++                    animate_env_flag( "ANIMATE_PRESERVE_X11_DRAG_MOTION",
++                                      &animate_preserve_x11_drag_motion ))
++                    return MERGE_HANDLE;
++                if (prev->xmotion.state & Button1Mask) animate_x11_drag_discarded++;
+                 TRACE( "discarding duplicate MotionNotify for window %lx\n", prev->xany.window );
+                 return MERGE_DISCARD;
+             }
+@@ -547,6 +569,19 @@ BOOL X11DRV_ProcessEvents( DWORD mask )
+         if (host_window_filter_event( &event, &prev_event )) continue;
+ 
+         get_event_data( &event );
++        if (event.type == ButtonPress && event.xbutton.button == Button1)
++        {
++            animate_x11_drag_received = 0;
++            animate_x11_drag_discarded = 0;
++        }
++        else if (event.type == MotionNotify && (event.xmotion.state & Button1Mask))
++            animate_x11_drag_received++;
++        else if (event.type == ButtonRelease && event.xbutton.button == Button1 &&
++                 animate_env_flag( "ANIMATE_X11_INPUT_TRACE", &animate_x11_input_trace ))
++            fprintf( stderr, "ANIMATE-X11-INPUT: drag received=%lu discarded=%lu preserve=%d\n",
++                     animate_x11_drag_received, animate_x11_drag_discarded,
++                     animate_env_flag( "ANIMATE_PRESERVE_X11_DRAG_MOTION",
++                                       &animate_preserve_x11_drag_motion ));
+         if (prev_event.type) action = merge_events( &prev_event, &event );
+         switch( action )
+         {

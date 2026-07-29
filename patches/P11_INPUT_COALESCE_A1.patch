@@ -1,0 +1,78 @@
+diff --git a/server/queue.c b/server/queue.c
+--- a/server/queue.c
++++ b/server/queue.c
+@@ -59,6 +59,31 @@ enum message_kind { SEND_MESSAGE, POST_MESSAGE };
+ /* list of processes registered for rawinput in the input desktop */
+ static struct list rawinput_processes = LIST_INIT(rawinput_processes);
+ 
++/*
++ * Animate P11 input experiment.
++ *
++ * This is deliberately opt-in and lives only in the laboratory source tree.
++ * ANIMATE_INPUT_TRACE=1 reports how many legacy WM_MOUSEMOVE messages were
++ * received, merged and queued during each left-button drag.
++ * ANIMATE_PRESERVE_DRAG_MOVES=1 prevents server-side coalescing while the left
++ * button is held, allowing an A/B test without changing normal Wine behavior.
++ */
++static int animate_input_trace = -1;
++static int animate_preserve_drag_moves = -1;
++static unsigned long animate_drag_received;
++static unsigned long animate_drag_merged;
++static unsigned long animate_drag_queued;
++
++static int env_flag_enabled( const char *name, int *cached )
++{
++    const char *value;
++
++    if (*cached != -1) return *cached;
++    value = getenv( name );
++    *cached = value && value[0] && strcmp( value, "0" );
++    return *cached;
++}
++
+ struct message_result
+ {
+     struct list            sender_entry;  /* entry in sender list */
+@@ -892,8 +917,12 @@ static int merge_mousemove( struct thread_input *input, const struct message *msg )
+ {
+     struct message *prev;
+ 
++    if ((msg->wparam & MK_LBUTTON) &&
++        env_flag_enabled( "ANIMATE_PRESERVE_DRAG_MOVES", &animate_preserve_drag_moves ))
++        return 0;
+     if (!(prev = find_mouse_message( input, msg ))) return 0;
+ 
++    if (msg->wparam & MK_LBUTTON) animate_drag_merged++;
+     prev->wparam  = msg->wparam;
+     prev->lparam  = msg->lparam;
+     prev->x       = msg->x;
+@@ -1965,6 +1994,21 @@ static void queue_hardware_message( struct desktop *desktop, struct message *msg,
+         if (desktop_shm->keystate[VK_XBUTTON2] & 0x80) msg->wparam |= MK_XBUTTON2;
+         break;
+     }
++
++    if (msg->msg == WM_LBUTTONDOWN)
++    {
++        animate_drag_received = 0;
++        animate_drag_merged = 0;
++        animate_drag_queued = 0;
++    }
++    else if (msg->msg == WM_MOUSEMOVE && (msg->wparam & MK_LBUTTON))
++        animate_drag_received++;
++    else if (msg->msg == WM_LBUTTONUP &&
++             env_flag_enabled( "ANIMATE_INPUT_TRACE", &animate_input_trace ))
++        fprintf( stderr, "ANIMATE-INPUT: drag received=%lu merged=%lu queued=%lu preserve=%d\n",
++                 animate_drag_received, animate_drag_merged, animate_drag_queued,
++                 env_flag_enabled( "ANIMATE_PRESERVE_DRAG_MOVES", &animate_preserve_drag_moves ));
++
+     msg->x = desktop_shm->cursor.x;
+     msg->y = desktop_shm->cursor.y;
+ 
+@@ -1993,6 +2037,7 @@ static void queue_hardware_message( struct desktop *desktop, struct message *msg,
+     if (!always_queue || merge_message( input, msg )) free_message( msg );
+     else
+     {
++        if (msg->msg == WM_MOUSEMOVE && (msg->wparam & MK_LBUTTON)) animate_drag_queued++;
+         msg->unique_id = 0;  /* will be set once we return it to the app */
+         list_add_tail( &input->msg_list, &msg->entry );
+         set_queue_bits( thread->queue, msg_bit );

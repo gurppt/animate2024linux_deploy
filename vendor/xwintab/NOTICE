@@ -1,0 +1,12 @@
+XWinTab (version patchee)
+=========================
+
+Base sur XWinTab par Graham--M : https://github.com/Graham--M/XWinTab
+Licence : celle du depot upstream (inclure le fichier LICENSE/COPYING d'upstream
+en copiant la source ici).
+
+Ce dossier contient une version MODIFIEE. Les modifications (7 correctifs rendant
+XWinTab compatible avec la famille Flash/Animate) sont decrites dans PATCHES.md.
+
+Merci a l'auteur original. Ces correctifs peuvent etre proposes en Pull Request
+upstream pour profiter a toute la communaute.

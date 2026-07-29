@@ -1,0 +1,267 @@
+--- a/dlls/winex11.drv/window.c
++++ b/dlls/winex11.drv/window.c
+@@ -99,6 +99,11 @@
+ /* X context to associate a struct x11drv_win_data to an hwnd */
+ static XContext win_data_context = 0;
+ static XContext host_window_context = 0;
++/* Animate floating palettes need ABOVE while the Animate process owns the host
++ * foreground, but ABOVE must be dropped when another host application is active.
++ * This follows _NET_ACTIVE_WINDOW, not X input focus: owned Adobe popups can retain
++ * X focus after the application has been deactivated. */
++static BOOL animate_palette_process_active = TRUE;
+ 
+ static const WCHAR whole_window_prop[] =
+     {'_','_','w','i','n','e','_','x','1','1','_','w','h','o','l','e','_','w','i','n','d','o','w',0};
+@@ -465,12 +470,27 @@
+ static BOOL is_window_managed( HWND hwnd, UINT swp_flags, BOOL fullscreen )
+ {
+     DWORD style, ex_style;
++    RECT rect;
+ 
+     if (!managed_mode) return FALSE;
+ 
+     /* child windows are not managed */
+     style = NtUserGetWindowLongW( hwnd, GWL_STYLE );
+     if ((style & (WS_CHILD|WS_POPUP)) == WS_CHILD) return FALSE;
++    ex_style = NtUserGetWindowLongW( hwnd, GWL_EXSTYLE );
++    /* Animate implements a floating panel group as two owned NOACTIVATE
++     * popups.  Letting xfwm manage them causes a work-area clamp during its
++     * move/reparent cycle to affect only the outer popup; the DVA content then
++     * loses its pointer offset and jumps.  Adobe itself switches these windows
++     * to override-redirect after some drags, where the pair is stable.  Start
++     * panel-sized NOACTIVATE popups in that mode and leave modal dialogs and
++     * the main window managed. */
++    if (process_name && !strcasecmp( process_name, "Animate.exe" ) &&
++        (style & WS_POPUP) && (ex_style & WS_EX_NOACTIVATE) &&
++        NtUserGetWindowRelative( hwnd, GW_OWNER ) &&
++        NtUserGetWindowRect( hwnd, &rect, NtUserGetDpiForWindow( hwnd ) ) &&
++        rect.right - rect.left > 32 && rect.bottom - rect.top > 32)
++        return FALSE;
+     /* activated windows are managed */
+     if (!(swp_flags & (SWP_NOACTIVATE|SWP_HIDEWINDOW))) return TRUE;
+     if (hwnd == get_active_window()) return TRUE;
+@@ -486,7 +506,6 @@
+         if (fullscreen) return TRUE;
+     }
+     /* application windows are managed */
+-    ex_style = NtUserGetWindowLongW( hwnd, GWL_EXSTYLE );
+     if (ex_style & WS_EX_APPWINDOW) return TRUE;
+     /* windows that own popups are managed */
+     if (has_owned_popups( hwnd )) return TRUE;
+@@ -1708,6 +1727,30 @@
+          */
+         !(new_state & (1 << NET_WM_STATE_FULLSCREEN)))
+         new_state |= (1 << NET_WM_STATE_ABOVE);
++    /* Adobe Animate floating palettes are owned popup (DIALOG-type) windows that Adobe keeps
++       above the main window via its own z-order. Under a WM this fails: winex11 abandons
++       managed raises (window_set_config) and only ever restacks the single topmost sibling
++       (sync_window_position), so a detached palette sinks behind its owner on any focus or
++       interaction and never comes back. Verified on this VM (xfwm4) that _NET_WM_STATE_ABOVE
++       reliably holds the palette in front across canvas-clicks / interaction, where raise and
++       sibling-restack requests are dropped or mishandled by the WM. So we express the palette's
++       intended stacking declaratively: mark owned, managed, non-tiny popup windows ABOVE.
++       Native equivalent of the float_palette_watcher userspace workaround; no Adobe bytes.
++       NOTE: this keeps palettes above ALL windows (incl. other apps). A focus-gated variant was
++       tried (drop ABOVE on app deactivation) but xfwm4/X focus races left ABOVE stuck and blocked
++       other apps - reverted. See fable_winex11_zorder_strategy.md for the clean-fix TODO. */
++    else if (process_name && !strcasecmp( process_name, "Animate.exe" ) &&
++             data->managed && (style & WS_POPUP) &&
++             NtUserGetWindowRelative( data->hwnd, GW_OWNER ) &&
++             (data->rects.window.right - data->rects.window.left) > 32 &&
++             (data->rects.window.bottom - data->rects.window.top) > 32 &&
++             !(new_state & (1 << NET_WM_STATE_FULLSCREEN)))
++    {
++        if (animate_palette_process_active)
++            new_state |= (1 << NET_WM_STATE_ABOVE);
++        else
++            new_state |= (1 << NET_WM_STATE_BELOW);
++    }
+     if (!data->add_taskbar)
+     {
+         if (data->skip_taskbar || (ex_style & WS_EX_NOACTIVATE)
+@@ -1721,6 +1764,117 @@
+     update_fullscreen_monitors( data, FALSE );
+ }
+ 
++/* Switch the mutually exclusive ABOVE/BELOW pair in one compatibility
++ * transaction.  Wine's generic state machine intentionally sends one EWMH bit
++ * per PropertyNotify; xfwm4 can leave this specific transient chain stuck on
++ * BELOW during the return transition.  Explicit remove/add requests (the same
++ * protocol used by wmctrl) are reliable here. */
++static void set_animate_palette_net_state( struct x11drv_win_data *data, BOOL active )
++{
++    UINT above = 1 << NET_WM_STATE_ABOVE, below = 1 << NET_WM_STATE_BELOW;
++    UINT old_state = data->pending_state.net_wm_state;
++    UINT new_state = (old_state & ~(above | below)) | (active ? above : below);
++    XEvent xev = {0};
++
++    if (old_state == new_state) return;
++
++    xev.xclient.type = ClientMessage;
++    xev.xclient.window = data->whole_window;
++    xev.xclient.message_type = x11drv_atom(_NET_WM_STATE);
++    xev.xclient.display = data->display;
++    xev.xclient.send_event = True;
++    xev.xclient.format = 32;
++    xev.xclient.data.l[3] = 1;
++
++    if (old_state & (active ? below : above))
++    {
++        xev.xclient.data.l[0] = _NET_WM_STATE_REMOVE;
++        xev.xclient.data.l[1] = active ? x11drv_atom(_NET_WM_STATE_BELOW)
++                                       : x11drv_atom(_NET_WM_STATE_ABOVE);
++        XSendEvent( data->display, DefaultRootWindow( data->display ), False,
++                    SubstructureRedirectMask | SubstructureNotifyMask, &xev );
++    }
++    if (!(old_state & (active ? above : below)))
++    {
++        xev.xclient.data.l[0] = _NET_WM_STATE_ADD;
++        xev.xclient.data.l[1] = active ? x11drv_atom(_NET_WM_STATE_ABOVE)
++                                       : x11drv_atom(_NET_WM_STATE_BELOW);
++        XSendEvent( data->display, DefaultRootWindow( data->display ), False,
++                    SubstructureRedirectMask | SubstructureNotifyMask, &xev );
++    }
++
++    data->desired_state.net_wm_state = new_state;
++    data->pending_state.net_wm_state = new_state;
++    data->net_wm_state_serial = 0;
++}
++
++/* Keep Adobe Animate palettes above their owner while Animate is active, but
++ * below the newly active host application after Alt-Tab/click-away.
++ *
++ * Managed palettes are controlled through _NET_WM_STATE_ABOVE.  Adobe also uses
++ * override-redirect palettes while restoring/splitting panel groups; the WM
++ * cannot stack those, so place them immediately below the external active X
++ * window and raise them again when Animate becomes active.
++ *
++ * Scope this compatibility fix to Animate.exe.  The previous unconditional
++ * owned-popup rule changed every Wine application using this GE-Proton build. */
++static void update_animate_palette_activation( BOOL active, Window host_active )
++{
++    HWND *list;
++    UINT count = 0, i;
++
++    if (!process_name || strcasecmp( process_name, "Animate.exe" )) return;
++    if (animate_palette_process_active == active) return;
++    animate_palette_process_active = active;
++
++    if (!(list = build_hwnd_list())) return;
++    while (list[count] != HWND_BOTTOM) count++;
++
++    /* build_hwnd_list is in Win32 z-order (top to bottom).  Raise bottom-to-top
++     * to preserve that order when Animate becomes active. */
++    for (i = 0; i < count; i++)
++    {
++        UINT index = active ? count - i - 1 : i;
++        struct x11drv_win_data *data;
++        DWORD style;
++
++        if (!(data = get_win_data( list[index] ))) continue;
++        style = NtUserGetWindowLongW( data->hwnd, GWL_STYLE );
++        if (!(style & WS_VISIBLE) || !(style & WS_POPUP) ||
++            !NtUserGetWindowRelative( data->hwnd, GW_OWNER ) ||
++            (data->rects.window.right - data->rects.window.left) <= 32 ||
++            (data->rects.window.bottom - data->rects.window.top) <= 32 ||
++            data->is_fullscreen || !data->whole_window)
++        {
++            release_win_data( data );
++            continue;
++        }
++
++        if (data->managed)
++        {
++            set_animate_palette_net_state( data, active );
++            XFlush( data->display );
++        }
++        else if (active)
++        {
++            XRaiseWindow( data->display, data->whole_window );
++            XFlush( data->display );
++        }
++        else if (host_active && host_active != root_window)
++        {
++            /* _NET_ACTIVE_WINDOW names the WM client, which xfwm reparents below
++             * a frame; it is therefore not a root sibling of our override window
++             * and cannot safely be used with CWSibling (BadMatch).  Lowering is
++             * deterministic while inactive; activation raises the group again. */
++            XLowerWindow( data->display, data->whole_window );
++            XFlush( data->display );
++        }
++        release_win_data( data );
++    }
++    free( list );
++    XFlush( x11drv_thread_data()->display );
++}
++
+ /***********************************************************************
+  *     read_net_wm_states
+  */
+@@ -2133,7 +2287,10 @@
+                                  void *desired, void *pending, void *current, const char *expected,
+                                  const char *prefix, const char *received, const char *reason )
+ {
+-    if (serial < *expect_serial) reason = "old ";
++    /* P2 (Animate-Linux): si le changement de propriete precede notre requete mais porte DEJA la
++     * valeur demandee, c'est une completion (notre requete etait un no-op, aucun notify ne viendra) :
++     * garder expect_serial bloquerait DEFINITIVEMENT tous les updates d'etat de cette fenetre. */
++    if (serial < *expect_serial && memcmp( pending, value, size )) reason = "old ";
+     if (reason)
+     {
+         WARN( "Ignoring %s%s%s%s\n", prefix, reason, received, expected );
+@@ -2171,6 +2328,7 @@
+     UINT *desired = &data->desired_state.wm_state, *pending = &data->pending_state.wm_state, *current = &data->current_state.wm_state;
+     unsigned long *expect_serial = &data->wm_state_serial;
+     const char *reason = NULL, *expected, *received, *prefix;
++    UINT wanted = *desired; /* P1 (Animate-Linux): etat de visibilite voulu par le cote Win32 */
+ 
+     prefix = wine_dbg_sprintf( "window %p/%lx ", data->hwnd, data->whole_window );
+     received = wine_dbg_sprintf( "WM_STATE %#x/%lu", value, serial );
+@@ -2181,6 +2339,16 @@
+     if (!handle_state_change( serial, expect_serial, sizeof(value), &value, desired, pending,
+                               current, expected, prefix, received, reason ))
+         return;
++    /* P1 (Animate-Linux): ne JAMAIS laisser un WM_STATE inattendu du WM annuler un hide Win32.
++     * La visibilite appartient au cote Win32 ; on restaure le desired pour que le replay ci-dessous
++     * re-demande l'unmap. Corrige les popups owned fantomes (seule leur ombre reste visible) quand
++     * le hide entre en course avec des evenements WM. Pas de boucle infinie : le WM finit par retirer
++     * la fenetre ; au pire un aller-retour trace par le WARN. */
++    if (wanted == WithdrawnState && *desired != WithdrawnState)
++    {
++        WARN( "%srestoring desired WithdrawnState (WM imposed %#x)\n", prefix, *desired );
++        *desired = WithdrawnState;
++    }
+     data->current_state.activate = data->pending_state.activate;
+     data->reparenting = 0;
+ 
+@@ -2313,6 +2481,8 @@
+     unsigned long *expect_serial = &data->net_active_window_serial;
+     const char *expected, *received;
+     HWND current_hwnd, pending_hwnd;
++    DWORD active_pid = 0;
++    BOOL process_active;
+ 
+     current_hwnd = hwnd_from_window( data->display, value );
+     pending_hwnd = hwnd_from_window( data->display, *pending );
+@@ -2324,6 +2494,13 @@
+         return;
+ 
+     if (value) get_window_name( data->display, value, &data->active_window );
++    process_active = current_hwnd && current_hwnd != NtUserGetDesktopWindow() &&
++                     NtUserGetWindowThread( current_hwnd, &active_pid ) &&
++                     active_pid == GetCurrentProcessId();
++    /* xfwm briefly clears _NET_ACTIVE_WINDOW during popup drag/reparent cycles.
++     * Treat zero as transitional; a real external activation follows with its
++     * non-zero X window, whereas a palette drag must not deactivate Animate. */
++    if (value) update_animate_palette_activation( process_active, value );
+     NtUserPostMessage( NtUserGetForegroundWindow(), WM_WINE_WINDOW_STATE_CHANGED, 0, 0 );
+ }
+ 
+@@ -4237,6 +4414,7 @@
+         char const *sgi = getenv( "SteamGameId" );
+ 
+         if (!strcmp( data->window_manager, "GNOME Shell" )) strcpy( data->window_manager, "Mutter" );
++        if (!strcmp( data->window_manager, "Mutter (Muffin)" )) strcpy( data->window_manager, "Mutter" );
+         TRACE( "Detected window manager: %s\n", debugstr_a(data->window_manager) );
+ 
+         /* Street Fighter V expects a certain sequence of window resizes

@@ -1,0 +1,12 @@
+*.log
+*.tmp
+.DS_Store
+manifests/source-tree.sha256
+
+# Fontes F1 présentes localement pour le pack privé. Ne retirer cette règle
+# qu'avec l'URL d'origine et le texte d'attribution/licence redistribuable.
+assets/private/segoe-ui/
+installer/cache/
+installer/*.exe
+installer/state/
+installer/work/

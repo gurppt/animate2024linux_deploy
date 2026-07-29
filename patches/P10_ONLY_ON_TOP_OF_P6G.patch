@@ -1,0 +1,38 @@
+--- a/dlls/winex11.drv/window.c
++++ b/dlls/winex11.drv/window.c
+@@ -470,12 +470,27 @@
+ static BOOL is_window_managed( HWND hwnd, UINT swp_flags, BOOL fullscreen )
+ {
+     DWORD style, ex_style;
++    RECT rect;
+ 
+     if (!managed_mode) return FALSE;
+ 
+     /* child windows are not managed */
+     style = NtUserGetWindowLongW( hwnd, GWL_STYLE );
+     if ((style & (WS_CHILD|WS_POPUP)) == WS_CHILD) return FALSE;
++    ex_style = NtUserGetWindowLongW( hwnd, GWL_EXSTYLE );
++    /* Animate implements a floating panel group as two owned NOACTIVATE
++     * popups.  Letting xfwm manage them causes a work-area clamp during its
++     * move/reparent cycle to affect only the outer popup; the DVA content then
++     * loses its pointer offset and jumps.  Adobe itself switches these windows
++     * to override-redirect after some drags, where the pair is stable.  Start
++     * panel-sized NOACTIVATE popups in that mode and leave modal dialogs and
++     * the main window managed. */
++    if (process_name && !strcasecmp( process_name, "Animate.exe" ) &&
++        (style & WS_POPUP) && (ex_style & WS_EX_NOACTIVATE) &&
++        NtUserGetWindowRelative( hwnd, GW_OWNER ) &&
++        NtUserGetWindowRect( hwnd, &rect, NtUserGetDpiForWindow( hwnd ) ) &&
++        rect.right - rect.left > 32 && rect.bottom - rect.top > 32)
++        return FALSE;
+     /* activated windows are managed */
+     if (!(swp_flags & (SWP_NOACTIVATE|SWP_HIDEWINDOW))) return TRUE;
+     if (hwnd == get_active_window()) return TRUE;
+@@ -491,7 +506,6 @@
+         if (fullscreen) return TRUE;
+     }
+     /* application windows are managed */
+-    ex_style = NtUserGetWindowLongW( hwnd, GWL_EXSTYLE );
+     if (ex_style & WS_EX_APPWINDOW) return TRUE;
+     /* windows that own popups are managed */
+     if (has_owned_popups( hwnd )) return TRUE;

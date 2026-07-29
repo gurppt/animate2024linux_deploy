@@ -1,0 +1,2 @@
+Source repository: https://github.com/gurppt/flashcs6linux_deploy
+Source commit: 6efd528630cda637f0bc1e675f931cbaa8f80a1a

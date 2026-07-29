@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="${ANIMATE_PACK_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}"
+real="$root/runtime/xdg-data/umu/steamrt4/pressure-vessel/libexec/steam-runtime-tools-0/srt-bwrap"
+p11="$root/support/p11-properties-a2"
+[[ -x "$real" ]] || {
+    printf 'srt-bwrap local introuvable: %s\n' "$real" >&2
+    exit 1
+}
+
+out=()
+inserted=0
+argv=("$@")
+i=0
+while (( i < ${#argv[@]} )); do
+    out+=("${argv[i]}")
+    if (( ! inserted )) && [[ ${argv[i]} == --args ]]; then
+        i=$((i + 1))
+        out+=("${argv[i]}")
+        out+=(--tmpfs /run/host/fonts --tmpfs /run/host/user-fonts)
+        if [[ -d "$p11" ]]; then
+            out+=(
+                --ro-bind "$p11/wineserver"
+                    "$root/runtime/GE-Proton11-1/files/bin/wineserver"
+                --ro-bind "$p11/gdiplus.dll"
+                    "$root/app/prefix/drive_c/windows/system32/gdiplus.dll"
+                --ro-bind "$p11/win32u.so"
+                    "$root/runtime/GE-Proton11-1/files/lib/wine/x86_64-unix/win32u.so"
+                --ro-bind "$p11/kernelbase.dll"
+                    "$root/runtime/GE-Proton11-1/files/lib/wine/x86_64-windows/kernelbase.dll"
+                --ro-bind "$p11/dvaui.dll"
+                    "$root/app/prefix/drive_c/Program Files/Adobe/Adobe Animate 2024/dvaui.dll"
+            )
+        fi
+        inserted=1
+    fi
+    i=$((i + 1))
+done
+exec "$real" "${out[@]}"

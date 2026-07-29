@@ -1,0 +1,12 @@
+LIBRARY wintab32.dll
+EXPORTS
+    WTInfoW        @1020
+    WTOpenW        @1021
+    WTGetW         @1061
+    WTClose        @22
+    WTPacketsGet   @23
+    WTPacketsPeek  @80
+    WTEnable       @40
+    WTOverlap      @41
+    WTQueueSizeGet @84
+    WTQueueSizeSet @85
