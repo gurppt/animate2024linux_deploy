@@ -16,6 +16,36 @@ The patch set is deliberately split into:
 No authentication token, account state, hardware identity, or licence check is
 modified by these patches.
 
+## MSXML3 runtime requirement
+
+Animate's DVA UI loads custom cursor hotspots through
+`dvaui::utility::LoadCursorHotSpot()`. The cursor metadata is an Adobe
+property-list passed to `dvacore::proplist::utils::ReadPropList()`.
+
+For `CursorDataID-17`, the input is a valid 361-byte XML property-list with a
+hotspot array containing `(8, 3)`. Under the tested GE-Proton 11-1 runtime,
+Wine's builtin MSXML3 path rejects this buffer and displays:
+
+```text
+Error parsing properties list from memory.
+```
+
+The failure was captured with a native breakpoint at the error branch in
+`ReadPropList`, whose caller resolved to `LoadCursorHotSpot`. Replacing the
+application executable, DVA UI patch, user preset state, AMT metadata and
+Visual C++ runtime did not alter the result. Switching only to the pinned
+native MSXML3 32/64-bit pair eliminated the error during repeated preset
+traversal.
+
+The final deployment therefore:
+
+1. installs the four files under `vendor/msxml3` into the corresponding
+   `system32` and `syswow64` prefix directories;
+2. verifies their SHA-256 hashes during deployment and launch;
+3. selects the native parser with `msxml3=n`.
+
+Do not change this override back to `msxml3=b` when rebuilding the prefix.
+
 ## 1. Frozen inputs and integrity boundary
 
 The compatibility work targets these exact inputs:

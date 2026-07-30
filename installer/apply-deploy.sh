@@ -21,6 +21,7 @@ version_proxy_relative='drive_c/Program Files/Adobe/Adobe Animate 2024/version.d
 version_real_relative='drive_c/Program Files/Adobe/Adobe Animate 2024/version_real.dll'
 reference="$repo_root/reference/p11-properties-a2"
 xwintab="$repo_root/vendor/xwintab/prebuilt/x86_64"
+msxml3="$repo_root/vendor/msxml3"
 
 die()
 {
@@ -70,6 +71,17 @@ for file in "${!xwintab_hashes[@]}"; do
        "${xwintab_hashes[$file]}" ]] ||
         die "unexpected vendored XWinTab hash: $file"
 done
+declare -A msxml3_hashes=(
+    [system32/msxml3.dll]="dbebbda0c3f26ef348d239c5180d2559129944092095cd1764db0f197b1fbc9d"
+    [system32/msxml3r.dll]="dcbf9db53a272510255a7500614933cee21165e1960ee149de2267152034b093"
+    [syswow64/msxml3.dll]="a98ce3223f50eeb3fe9f1a28a81393bce13ab3d837dab8f5e66d260a669ce00d"
+    [syswow64/msxml3r.dll]="b604ab2b27598de28a5ed89626c41e6ea551eae362e83ec421a52f426b31f551"
+)
+for file in "${!msxml3_hashes[@]}"; do
+    [[ "$(sha256sum "$msxml3/$file" | awk '{print $1}')" == \
+       "${msxml3_hashes[$file]}" ]] ||
+        die "unexpected vendored MSXML3 hash: $file"
+done
 
 winex11="$repo_root/reference/winex11.P10.confirmed.so"
 winex11_hash=1fb4c880c8980fdbaad1b320ecc6866ce0ab30695fbe6b9d6e257a44088cadcf
@@ -84,6 +96,12 @@ install -m 0644 "$xwintab/wintab32.dll" \
     "$target/app/prefix/drive_c/windows/system32/wintab32.dll"
 install -m 0755 "$xwintab/XWinTabHelper.dll.so" \
     "$target/app/prefix/drive_c/windows/system32/XWinTabHelper.dll.so"
+for arch in system32 syswow64; do
+    install -m 0644 "$msxml3/$arch/msxml3.dll" \
+        "$target/app/prefix/drive_c/windows/$arch/msxml3.dll"
+    install -m 0644 "$msxml3/$arch/msxml3r.dll" \
+        "$target/app/prefix/drive_c/windows/$arch/msxml3r.dll"
+done
 echo "Copying pinned GE-Proton11-1..."
 cp -a "$proton_source" "$target/runtime/GE-Proton11-1"
 echo "Copying UMU runtime data..."
@@ -116,6 +134,10 @@ critical=(
     "app/prefix/$dvaui_relative"
     "app/prefix/drive_c/windows/system32/wintab32.dll"
     "app/prefix/drive_c/windows/system32/XWinTabHelper.dll.so"
+    "app/prefix/drive_c/windows/system32/msxml3.dll"
+    "app/prefix/drive_c/windows/system32/msxml3r.dll"
+    "app/prefix/drive_c/windows/syswow64/msxml3.dll"
+    "app/prefix/drive_c/windows/syswow64/msxml3r.dll"
     "runtime/GE-Proton11-1/proton"
     "runtime/GE-Proton11-1/files/lib/wine/x86_64-unix/winex11.so"
     "runtime/umu-launcher/umu-run"

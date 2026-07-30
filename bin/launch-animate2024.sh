@@ -44,6 +44,19 @@ for module in "${!p11_hashes[@]}"; do
     [[ "$actual" == "${p11_hashes[$module]}" ]] ||
         die "module P11 inattendu: $module ($actual)"
 done
+declare -A msxml3_hashes=(
+    [system32/msxml3.dll]="dbebbda0c3f26ef348d239c5180d2559129944092095cd1764db0f197b1fbc9d"
+    [system32/msxml3r.dll]="dcbf9db53a272510255a7500614933cee21165e1960ee149de2267152034b093"
+    [syswow64/msxml3.dll]="a98ce3223f50eeb3fe9f1a28a81393bce13ab3d837dab8f5e66d260a669ce00d"
+    [syswow64/msxml3r.dll]="b604ab2b27598de28a5ed89626c41e6ea551eae362e83ec421a52f426b31f551"
+)
+for module in "${!msxml3_hashes[@]}"; do
+    path="$prefix/drive_c/windows/$module"
+    [[ -f "$path" ]] || die "module MSXML3 absent: $path"
+    actual="$(sha256sum "$path" | awk '{print $1}')"
+    [[ "$actual" == "${msxml3_hashes[$module]}" ]] ||
+        die "module MSXML3 inattendu: $module ($actual)"
+done
 if [[ -x "$root/runtime/umu-launcher/umu-run" ]]; then
     umu_run="$root/runtime/umu-launcher/umu-run"
 elif command -v umu-run >/dev/null 2>&1; then
@@ -79,7 +92,7 @@ export DISPLAY="${DISPLAY:-:0}"
 export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
 export WEBVIEW2_BROWSER_EXECUTABLE_FOLDER='C:\Program Files\Common Files\Adobe\Microsoft\EdgeWebView'
 vcrun_overrides='concrt140=n,b;msvcp140=n,b;msvcp140_1=n,b;msvcp140_2=n,b;msvcp140_atomic_wait=n,b;msvcp140_codecvt_ids=n,b;vcamp140=n,b;vccorlib140=n,b;vcomp140=n,b;vcruntime140=n,b;vcruntime140_1=n,b;mfc140=n;mfc140u=n;mfcm140=n;mfcm140u=n'
-export WINEDLLOVERRIDES="${ANIMATE_WINEDLLOVERRIDES:-gdiplus=n;wintab32=n;version=n,b;msxml3=b;$vcrun_overrides}"
+export WINEDLLOVERRIDES="${ANIMATE_WINEDLLOVERRIDES:-gdiplus=n;wintab32=n;version=n,b;msxml3=n;$vcrun_overrides}"
 export WINEDEBUG="${WINEDEBUG:--all}"
 export PROTON_USE_XALIA="${PROTON_USE_XALIA:-0}"
 export ANIMATE_INPUT_TRACE=0

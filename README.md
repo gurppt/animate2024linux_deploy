@@ -224,6 +224,16 @@ place.
 
 ## Technical implementation
 
+### Native MSXML3 cursor-property parser
+
+The installer vendors a pinned 32-bit and 64-bit MSXML3 pair and launches
+Animate with `msxml3=n`. This is required for DVA cursor metadata: Wine's
+builtin MSXML3 rejects the otherwise valid property-list embedded in
+`CursorDataID-17`, causing an `Error parsing properties list from memory`
+dialog when the pointer crosses New Document presets. The launcher verifies
+all four DLL hashes before starting Animate so the result does not depend on
+the distribution's Wine or winetricks package version.
+
 ### Reproducible installation
 
 The installer performs the following deterministic operations:

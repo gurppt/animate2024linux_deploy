@@ -168,6 +168,55 @@ find_registered_install()
     return 1
 }
 
+stop_install_processes()
+{
+    local candidate cmdline envline pid child deadline
+    local -a pending=() targets=()
+    declare -A selected=()
+
+    # Do not remove a live prefix. Select processes whose command line or
+    # environment refers to this exact managed installation, then include
+    # their descendants (Wine children can expose only Windows paths).
+    for candidate in /proc/[0-9]*; do
+        pid="${candidate##*/}"
+        [[ "$pid" != "$$" ]] || continue
+        cmdline=
+        envline=
+        [[ ! -r "$candidate/cmdline" ]] ||
+            cmdline="$(tr '\0' ' ' 2>/dev/null <"$candidate/cmdline" || true)"
+        [[ ! -r "$candidate/environ" ]] ||
+            envline="$(tr '\0' '\n' 2>/dev/null <"$candidate/environ" || true)"
+        if [[ "$cmdline" == *"$INSTALL_ROOT/"* ||
+              "$envline" == *"=$INSTALL_ROOT/"* ]]; then
+            selected["$pid"]=1
+            pending+=("$pid")
+        fi
+    done
+    while ((${#pending[@]})); do
+        pid="${pending[0]}"
+        pending=("${pending[@]:1}")
+        while IFS= read -r child; do
+            [[ -n "$child" && -z "${selected[$child]:-}" ]] || continue
+            selected["$child"]=1
+            pending+=("$child")
+        done < <(pgrep -P "$pid" 2>/dev/null || true)
+    done
+    ((${#selected[@]})) || return 0
+    mapfile -t targets < <(printf '%s\n' "${!selected[@]}" | sort -rn)
+    ui_warn "Stopping ${#targets[@]} running process(es) from this installation."
+    kill -TERM "${targets[@]}" 2>/dev/null || true
+    deadline=$((SECONDS + 10))
+    while ((SECONDS < deadline)); do
+        pending=()
+        for pid in "${targets[@]}"; do
+            kill -0 "$pid" 2>/dev/null && pending+=("$pid")
+        done
+        ((${#pending[@]})) || return 0
+        sleep 1
+    done
+    kill -KILL "${pending[@]}" 2>/dev/null || true
+}
+
 uninstall_registered()
 {
     if (( install_root_explicit )); then
@@ -191,6 +240,7 @@ uninstall_registered()
         ui_warn "Uninstall cancelled."
         exit 0
     }
+    stop_install_processes
     rm -rf -- "$INSTALL_ROOT"
     [[ -z "${INSTALL_RECORD:-}" ]] || rm -f -- "$INSTALL_RECORD"
     if [[ -d "$records_root" ]]; then
