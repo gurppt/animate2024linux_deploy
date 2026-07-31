@@ -139,6 +139,7 @@ update-desktop-database "$HOME/.local/share/applications"
 Segoe UI improves the metrics and appearance of some tabs, numeric fields and
 Adobe panels. Fonts are not included in this repository. You must provide a
 copy that you are legally allowed to use.
+(https://www.deefont.com/segoe-ui-font-family/ )
 
 The currently supported archive is named:
 
